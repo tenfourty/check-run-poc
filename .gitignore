@@ -1,0 +1,30 @@
+# Environment files
+.env
+.env.local
+
+# Node modules (if extending with Node.js)
+node_modules/
+
+# Python (if extending with Python)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# GitHub tokens and keys
+*.pem
+*.key
+
+# Logs
+*.log

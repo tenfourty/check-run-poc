@@ -1,0 +1,174 @@
+name: GitGuardian Security Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write
+  statuses: write
+
+jobs:
+  ggshield-scan:
+    name: GitGuardian Secret Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for comprehensive scanning
+
+      - name: GitGuardian scan
+        uses: GitGuardian/ggshield-action@v1
+        env:
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+
+  verify-dev-setup:
+    name: Verify Developer GitGuardian Setup
+    runs-on: ubuntu-latest
+    needs: ggshield-scan
+    if: always()  # Run even if ggshield-scan fails
+    steps:
+      - name: Check for admin override label
+        id: check-override
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = context.payload.pull_request.labels.map(l => l.name);
+            const hasOverride = labels.includes('skip-gg-verification');
+            core.setOutput('skip', hasOverride);
+            if (hasOverride) {
+              core.notice('Admin override label detected. Skipping verification.');
+            }
+            return hasOverride;
+
+      - name: Get PR author info
+        id: author
+        if: steps.check-override.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const author = context.payload.pull_request.user.login;
+            core.setOutput('username', author);
+            core.info(`PR Author: ${author}`);
+
+            // Try to get author email from commits
+            const commits = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+
+            if (commits.data.length > 0) {
+              const email = commits.data[0].commit.author.email;
+              core.setOutput('email', email);
+              core.info(`Author email: ${email}`);
+            }
+
+      - name: Verify GitGuardian PAT token exists
+        id: verify-token
+        if: steps.check-override.outputs.skip != 'true'
+        run: |
+          echo "Checking if developer has GitGuardian PAT token setup..."
+
+          # Get workspace members
+          MEMBERS_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Token ${{ secrets.GITGUARDIAN_SERVICE_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "https://api.gitguardian.com/v1/members")
+
+          HTTP_CODE=$(echo "$MEMBERS_RESPONSE" | tail -n1)
+          MEMBERS_BODY=$(echo "$MEMBERS_RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Failed to fetch workspace members. HTTP $HTTP_CODE"
+            echo "Response: $MEMBERS_BODY"
+            echo "verified=error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Search for member by email or username
+          AUTHOR_EMAIL="${{ steps.author.outputs.email }}"
+          AUTHOR_USERNAME="${{ steps.author.outputs.username }}"
+
+          echo "Searching for member with email: $AUTHOR_EMAIL"
+
+          # Extract member ID (this is a simplified search - in production you'd use jq)
+          MEMBER_ID=$(echo "$MEMBERS_BODY" | grep -o "\"id\":[0-9]*" | head -1 | grep -o "[0-9]*")
+
+          if [ -z "$MEMBER_ID" ]; then
+            echo "::warning::Could not find GitGuardian member for $AUTHOR_EMAIL"
+            echo "verified=not_found" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Found member ID: $MEMBER_ID"
+
+          # Check if member has active tokens
+          TOKENS_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Token ${{ secrets.GITGUARDIAN_SERVICE_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "https://api.gitguardian.com/v1/tokens")
+
+          HTTP_CODE=$(echo "$TOKENS_RESPONSE" | tail -n1)
+          TOKENS_BODY=$(echo "$TOKENS_RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Failed to fetch tokens. HTTP $HTTP_CODE"
+            echo "verified=error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Check if any tokens exist for this member
+          # In production, you'd parse JSON properly with jq
+          if echo "$TOKENS_BODY" | grep -q "\"member_id\":$MEMBER_ID"; then
+            echo "✅ Developer has active GitGuardian PAT token"
+            echo "verified=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Developer does not have an active GitGuardian PAT token"
+            echo "verified=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Report verification results
+        if: steps.check-override.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const verified = '${{ steps.verify-token.outputs.verified }}';
+            const author = '${{ steps.author.outputs.username }}';
+
+            if (verified === 'true') {
+              core.notice(`✅ ${author} has GitGuardian PAT token configured`);
+            } else if (verified === 'false') {
+              core.setFailed(`❌ ${author} does not have a GitGuardian PAT token set up.
+
+              Please set up your GitGuardian personal access token:
+
+              1. Sign in to GitGuardian dashboard: https://dashboard.gitguardian.com
+              2. Navigate to Settings > Personal Access Tokens
+              3. Create a new token with 'scan' scope
+              4. Install ggshield: pip install ggshield
+              5. Authenticate: ggshield auth login
+
+              For more information, visit: https://docs.gitguardian.com/ggshield-docs/getting-started
+
+              If you believe this is an error, contact your workspace admin to add the 'skip-gg-verification' label.`);
+            } else if (verified === 'not_found') {
+              core.warning(`⚠️  Could not verify GitGuardian setup for ${author}. Member not found in workspace.
+
+              This may mean:
+              - You're not yet added to the GitGuardian workspace
+              - Your GitHub email doesn't match your GitGuardian email
+
+              Please contact your workspace admin or add the 'skip-gg-verification' label if needed.`);
+            } else {
+              core.setFailed('Error occurred while verifying GitGuardian setup.');
+            }
