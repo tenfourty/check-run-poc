@@ -123,9 +123,11 @@ jobs:
           TOKENS_BODY=$(echo "$TOKENS_RESPONSE" | sed '$d')
 
           echo "Token API Response Code: $HTTP_CODE"
+          echo "Response body preview: ${TOKENS_BODY:0:500}"
 
           if [ "$HTTP_CODE" = "404" ]; then
             echo "::warning::Tokens endpoint not accessible (404). This may be due to API permissions or endpoint availability."
+            echo "Full response: $TOKENS_BODY"
             echo "::notice::Verification limited to member existence check only."
             echo "✅ Developer exists in GitGuardian workspace (member ID: $MEMBER_ID)"
             echo "⚠️  Unable to verify PAT token due to API limitations"
