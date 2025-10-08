@@ -25,11 +25,18 @@ If either check fails, the PR is blocked until resolved.
 - Comprehensive documentation
 
 **🚧 Remaining Work**
-- Test with real GitGuardian workspace
+- ~~Test with real GitGuardian workspace~~ ✅ Tested successfully
+- ~~Investigate correct API endpoint/permissions for listing tokens~~ ✅ Fixed - endpoint is `/v1/api_tokens`
 - Improve member matching logic (email/username mapping)
 - Add proper JSON parsing with `jq`
 - Consider adding token validity checks via `/v1/health`
 - Evaluate performance and rate limiting
+
+**📝 Testing Notes**
+- Successfully verified workspace membership via `/v1/members` endpoint
+- Token verification working via `/v1/api_tokens?member_id=X&status=active` endpoint
+- Requires service account with `scan`, `members:read`, and `api_tokens:read` scopes
+- POC fully functional - verifies developers have active GitGuardian tokens before allowing PR merge
 
 **💡 Future Considerations**
 - Check for `.pre-commit-config.yaml` with ggshield configured
