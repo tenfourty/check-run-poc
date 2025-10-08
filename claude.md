@@ -25,11 +25,17 @@ If either check fails, the PR is blocked until resolved.
 - Comprehensive documentation
 
 **🚧 Remaining Work**
-- Test with real GitGuardian workspace
+- ~~Test with real GitGuardian workspace~~ ✅ Tested successfully
+- Investigate correct API endpoint/permissions for listing tokens (currently getting 404)
 - Improve member matching logic (email/username mapping)
 - Add proper JSON parsing with `jq`
 - Consider adding token validity checks via `/v1/health`
 - Evaluate performance and rate limiting
+
+**📝 Testing Notes**
+- Successfully verified workspace membership via `/v1/members` endpoint
+- `/v1/tokens` endpoint returns 404 - needs investigation on correct path/permissions
+- Current implementation falls back to workspace membership verification (acceptable for POC)
 
 **💡 Future Considerations**
 - Check for `.pre-commit-config.yaml` with ggshield configured
